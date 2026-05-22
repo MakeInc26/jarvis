@@ -355,10 +355,10 @@ class TestLogViewerReportIssue:
             'body': body,
             'labels': 'bug'
         })
-        url = f"https://github.com/isair/jarvis/issues/new?{params}"
+        url = f"https://github.com/MakeInc26/jarvis/issues/new?{params}"
 
         # Parse and verify
-        assert url.startswith("https://github.com/isair/jarvis/issues/new?")
+        assert url.startswith("https://github.com/MakeInc26/jarvis/issues/new?")
         parsed = urllib.parse.urlparse(url)
         params_parsed = urllib.parse.parse_qs(parsed.query)
 

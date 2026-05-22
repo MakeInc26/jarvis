@@ -458,7 +458,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
                     'body': body,
                     'labels': 'bug,crash'
                 })
-                url = f"https://github.com/isair/jarvis/issues/new?{params}"
+                url = f"https://github.com/MakeInc26/jarvis/issues/new?{params}"
 
                 webbrowser.open(url)
                 self.accept()
@@ -920,7 +920,7 @@ class LogViewerWindow(QMainWindow):
             'body': body,
             'labels': 'bug'
         })
-        url = f"https://github.com/isair/jarvis/issues/new?{params}"
+        url = f"https://github.com/MakeInc26/jarvis/issues/new?{params}"
 
         webbrowser.open(url)
 
