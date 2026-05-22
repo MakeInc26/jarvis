@@ -33,6 +33,7 @@ from typing import Optional
 from faster_whisper import WhisperModel
 
 from .config import load_settings
+from .llm import configure_llm_provider
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory
 from .output.tts import create_tts_engine
@@ -314,9 +315,26 @@ def main() -> None:
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
+    # Configure the LLM provider routing once at startup. After this call,
+    # every chat helper in jarvis.llm dispatches based on cfg.llm_provider.
+    configure_llm_provider(
+        provider=cfg.llm_provider,
+        anthropic_api_key=cfg.anthropic_api_key,
+        anthropic_chat_model=cfg.anthropic_chat_model,
+        anthropic_max_tokens=cfg.anthropic_max_tokens,
+        anthropic_base_url=cfg.anthropic_base_url,
+    )
+
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)
-    print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
+    if cfg.llm_provider == "anthropic":
+        if cfg.anthropic_api_key:
+            print(f"🧠 Using Anthropic chat model: {cfg.anthropic_chat_model}", flush=True)
+        else:
+            print(f"⚠️  Anthropic provider selected but anthropic_api_key is empty — chat calls will fail", flush=True)
+        print(f"🔢 Using Ollama embed model: {cfg.ollama_embed_model} (Anthropic has no embeddings API)", flush=True)
+    else:
+        print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
     # MCP preflight: discover and cache external MCP tools

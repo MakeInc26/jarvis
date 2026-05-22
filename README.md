@@ -193,6 +193,26 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
 </p>
 
 <details>
+<summary><strong>Chat Provider (Ollama vs Anthropic)</strong></summary>
+
+By default Jarvis runs chat on a local Ollama model — fully offline, no API keys. To use Anthropic's Claude API instead, set `llm_provider` to `"anthropic"` and add your key:
+
+```json
+{
+  "llm_provider": "anthropic",
+  "anthropic_api_key": "sk-ant-...",
+  "anthropic_chat_model": "claude-sonnet-4-6",
+  "anthropic_max_tokens": 4096
+}
+```
+
+Supported models: `claude-haiku-4-5-20251001`, `claude-sonnet-4-6` (default), `claude-opus-4-7`.
+
+In Anthropic mode every chat slot (intent judge, planner, evaluator, main reply) runs on the same Claude model. Embeddings still use Ollama because Anthropic does not expose an embeddings API, so the memory graph and embedding-based tool selection still require a running Ollama with the `nomic-embed-text` model.
+
+</details>
+
+<details>
 <summary><strong>Speech Recognition (Whisper)</strong></summary>
 
 #### Language Modes

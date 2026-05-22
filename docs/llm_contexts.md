@@ -4,6 +4,19 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 ---
 
+## 0. Provider Routing
+
+- **File**: [src/jarvis/llm.py](src/jarvis/llm.py) — `_PROVIDER_CONFIG`, `configure_llm_provider()`, dispatch in `call_llm_direct`, `call_llm_streaming`, `chat_with_messages`.
+- **Trigger**: configured once at daemon startup ([daemon.py:main()](src/jarvis/daemon.py)) from `cfg.llm_provider` and the Anthropic settings. Every subsequent chat call dispatches through the module-level provider state.
+- **Backends**:
+  - `"ollama"` (default): `POST {ollama_base_url}/api/chat`, no auth, `options.num_ctx` and `think` on the payload, OpenAI-style tools.
+  - `"anthropic"`: `POST {anthropic_base_url}/messages` with `x-api-key` + `anthropic-version` headers. System prompts are lifted out of the messages array into the top-level `system` field. Tools are translated to Anthropic's `input_schema` shape. The response is normalised back to the Ollama chat shape (`{message: {content, tool_calls[*].function.{name, arguments}}}`) so every downstream context (#1 through #12) stays provider-agnostic.
+- **Model resolution**: in Anthropic mode the per-call `chat_model` argument is **ignored**. Every chat slot (main reply, intent judge, planner, evaluator, router, dictation cleaner) runs on `cfg.anthropic_chat_model`. The `intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model` knobs only take effect under Ollama; for Anthropic they collapse to a single Claude model.
+- **Embeddings**: always Ollama. The contexts that call `get_embedding()` (#6 memory enrichment ranking, #10 tool selection's embedding strategy, conversation summarisation hooks) require `ollama_base_url` + `ollama_embed_model` regardless of `llm_provider`. Anthropic does not expose an embeddings API.
+- **Error mapping**: Anthropic's HTTP 400 on a tools call is rethrown as `ToolsNotSupportedError` so the reply engine's text-mode tool-call fallback path still triggers.
+
+---
+
 ## 1. Main Reply Loop (agentic messages loop)
 
 - **File**: [src/jarvis/reply/engine.py](src/jarvis/reply/engine.py) — `reply()` and the loop at ~lines 1370-1650; native tool-call path in `chat_with_messages()` (~1424, 1455).

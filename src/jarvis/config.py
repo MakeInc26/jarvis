@@ -38,6 +38,33 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 DEFAULT_CHAT_MODEL = "gemma4:e2b"
 
 
+# ============================================================================
+# SUPPORTED ANTHROPIC MODELS
+# ============================================================================
+# When ``llm_provider`` is set to ``"anthropic"``, chat calls go to the
+# Anthropic Messages API instead of Ollama. Embeddings always stay on Ollama
+# (Anthropic does not expose an embeddings API). Add new Claude generations
+# here as Anthropic publishes them.
+
+SUPPORTED_ANTHROPIC_MODELS: Dict[str, Dict[str, str]] = {
+    "claude-haiku-4-5-20251001": {
+        "name": "Claude Haiku 4.5",
+        "description": "Fast, low-cost Claude. Good for routing, short replies, intent classification.",
+    },
+    "claude-sonnet-4-6": {
+        "name": "Claude Sonnet 4.6 (Default)",
+        "description": "Balanced cost and capability. Strong tool use and reasoning.",
+    },
+    "claude-opus-4-7": {
+        "name": "Claude Opus 4.7 (High-end)",
+        "description": "Most capable Claude. Use when accuracy matters more than latency or cost.",
+    },
+}
+
+# The default Anthropic chat model when `llm_provider == "anthropic"`.
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+
 def get_supported_model_ids() -> set[str]:
     """Get set of supported model IDs for quick lookup."""
     return set(SUPPORTED_CHAT_MODELS.keys())
@@ -73,9 +100,18 @@ class Settings:
     sqlite_vss_path: str | None
 
     # LLM & AI Models
+    # Provider routes chat calls. "ollama" (default) talks to the local Ollama
+    # endpoint at ``ollama_base_url``. "anthropic" talks to Anthropic's
+    # Messages API using ``anthropic_chat_model`` and ``anthropic_api_key``.
+    # Embeddings always use Ollama regardless of provider.
+    llm_provider: str
     ollama_base_url: str
     ollama_embed_model: str
     ollama_chat_model: str
+    anthropic_api_key: str
+    anthropic_chat_model: str
+    anthropic_max_tokens: int
+    anthropic_base_url: str
     llm_chat_timeout_sec: float
     llm_tools_timeout_sec: float
     # Tight deadline for the cheap distil passes used by memory_digest and
@@ -374,9 +410,19 @@ def get_default_config() -> Dict[str, Any]:
         "sqlite_vss_path": None,
 
         # LLM & AI Models
+        # ``llm_provider`` selects the chat backend. Embeddings stay on Ollama.
+        "llm_provider": "ollama",
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
+        # Anthropic backend (used when llm_provider == "anthropic"). The API
+        # key is read from this field; users set it via Settings or by
+        # editing config.json. Anthropic mode runs every chat slot (intent
+        # judge, planner, evaluator, main reply) on ``anthropic_chat_model``.
+        "anthropic_api_key": "",
+        "anthropic_chat_model": DEFAULT_ANTHROPIC_MODEL,
+        "anthropic_max_tokens": 4096,
+        "anthropic_base_url": "https://api.anthropic.com/v1",
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
         # Cheap distil passes should fail fast — a hung digest call would
@@ -589,6 +635,18 @@ def load_settings() -> Settings:
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
+    llm_provider = str(merged.get("llm_provider", "ollama") or "ollama").strip().lower()
+    if llm_provider not in ("ollama", "anthropic"):
+        llm_provider = "ollama"
+    anthropic_api_key = str(merged.get("anthropic_api_key", "") or "").strip()
+    anthropic_chat_model = str(merged.get("anthropic_chat_model", DEFAULT_ANTHROPIC_MODEL) or DEFAULT_ANTHROPIC_MODEL).strip()
+    try:
+        anthropic_max_tokens = int(merged.get("anthropic_max_tokens", 4096))
+    except (TypeError, ValueError):
+        anthropic_max_tokens = 4096
+    if anthropic_max_tokens < 1:
+        anthropic_max_tokens = 4096
+    anthropic_base_url = str(merged.get("anthropic_base_url", "https://api.anthropic.com/v1") or "https://api.anthropic.com/v1").strip().rstrip("/")
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
@@ -743,9 +801,14 @@ def load_settings() -> Settings:
         sqlite_vss_path=sqlite_vss_path,
 
         # LLM & AI Models
+        llm_provider=llm_provider,
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
         ollama_chat_model=ollama_chat_model,
+        anthropic_api_key=anthropic_api_key,
+        anthropic_chat_model=anthropic_chat_model,
+        anthropic_max_tokens=anthropic_max_tokens,
+        anthropic_base_url=anthropic_base_url,
         llm_chat_timeout_sec=llm_chat_timeout_sec,
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_digest_timeout_sec=llm_digest_timeout_sec,

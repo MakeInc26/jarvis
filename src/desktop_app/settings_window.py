@@ -26,6 +26,7 @@ from jarvis.config import (
     get_default_config, load_config,
     default_config_path, _save_json, _load_json,
     SUPPORTED_CHAT_MODELS,
+    SUPPORTED_ANTHROPIC_MODELS,
 )
 from jarvis.debug import debug_log
 from desktop_app.themes import apply_theme
@@ -98,9 +99,23 @@ def _build_field_metadata() -> List[FieldMeta]:
 
     # --- LLM & AI Models ---
     model_choices = [(mid, info["name"]) for mid, info in SUPPORTED_CHAT_MODELS.items()]
-    f("ollama_chat_model", "Chat Model", "Primary LLM for conversations",
+    anthropic_model_choices = [(mid, info["name"]) for mid, info in SUPPORTED_ANTHROPIC_MODELS.items()]
+    f("llm_provider", "LLM Provider",
+      "Where chat calls go. Embeddings always use Ollama.",
+      "llm", "choice",
+      choices=[("ollama", "Ollama (local)"), ("anthropic", "Anthropic (cloud)")])
+    f("ollama_chat_model", "Chat Model (Ollama)", "Primary LLM for conversations when provider is Ollama",
       "llm", "choice", choices=model_choices)
-    f("ollama_embed_model", "Embedding Model", "Model for text embeddings",
+    f("anthropic_chat_model", "Chat Model (Anthropic)",
+      "Claude model used when provider is Anthropic",
+      "llm", "choice", choices=anthropic_model_choices)
+    f("anthropic_api_key", "Anthropic API Key",
+      "API key for Anthropic. Required when provider is Anthropic.",
+      "llm", "str")
+    f("anthropic_max_tokens", "Anthropic Max Tokens",
+      "Output token limit per Anthropic chat call",
+      "llm", "int", min_val=512, max_val=64000, step=512)
+    f("ollama_embed_model", "Embedding Model", "Model for text embeddings (always Ollama)",
       "llm", "str")
     f("ollama_base_url", "Ollama URL", "Ollama server base URL",
       "llm", "str")

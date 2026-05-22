@@ -1,9 +1,14 @@
 {
   "db_path": "~/.local/share/jarvis/jarvis.db",
   "sqlite_vss_path": null,
+  "llm_provider": "ollama",
   "ollama_base_url": "http://127.0.0.1:11434",
   "ollama_embed_model": "nomic-embed-text",
   "ollama_chat_model": "gpt-oss:20b",
+  "anthropic_api_key": "",
+  "anthropic_chat_model": "claude-sonnet-4-6",
+  "anthropic_max_tokens": 4096,
+  "anthropic_base_url": "https://api.anthropic.com/v1",
   "llm_chat_timeout_sec": 180.0,
   "llm_tools_timeout_sec": 300.0,
   "llm_multi_step_timeout_sec": 600.0,
@@ -95,5 +100,6 @@
   "web_search_enabled": true,
   "brave_search_api_key": "",
   "wikipedia_fallback_enabled": true,
-  "mcps": {}
+  "mcps": {},
+  "_config_version": 1
 }
