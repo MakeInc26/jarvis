@@ -26,7 +26,7 @@ from jarvis.debug import debug_log
 
 from .paths import get_log_dir
 
-GITHUB_REPO = "isair/jarvis"
+GITHUB_REPO = "MakeInc26/jarvis"
 # Absolute path to macOS's ditto tool. Exposed as a module attribute so
 # tests (which run on non-macOS CI runners without /usr/bin/ditto) can
 # substitute a path that exists.

@@ -107,7 +107,7 @@ class TestCheckForUpdates:
                 "name": "v1.0.0",
                 "draft": False,
                 "prerelease": False,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/v1.0.0",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/v1.0.0",
                 "body": "Release notes",
                 "assets": [
                     {
@@ -139,7 +139,7 @@ class TestCheckForUpdates:
                 "name": "v1.1.0",
                 "draft": False,
                 "prerelease": False,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/v1.1.0",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/v1.1.0",
                 "body": "Release notes",
                 "assets": [
                     {
@@ -172,7 +172,7 @@ class TestCheckForUpdates:
                 "name": "Latest Development Build",
                 "draft": False,
                 "prerelease": True,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/latest",
                 "body": "Dev release notes",
                 "assets": [
                     {
@@ -205,7 +205,7 @@ class TestCheckForUpdates:
                 "name": "v2.0.0",
                 "draft": True,  # Draft release
                 "prerelease": False,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/v2.0.0",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/v2.0.0",
                 "body": "Release notes",
                 "assets": [
                     {
@@ -250,7 +250,7 @@ class TestCheckForUpdates:
                 "name": "v1.1.0",
                 "draft": False,
                 "prerelease": False,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/v1.1.0",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/v1.1.0",
                 "body": "Release notes",
                 "assets": [
                     {
@@ -283,7 +283,7 @@ class TestCheckForUpdates:
                 "name": "Latest Development Build",
                 "draft": False,
                 "prerelease": True,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/latest",
                 "body": "Dev release notes",
                 "assets": [
                     {
@@ -318,7 +318,7 @@ class TestCheckForUpdates:
                 "name": "Latest Development Build",
                 "draft": False,
                 "prerelease": True,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/latest",
                 "body": "Dev release notes",
                 "assets": [
                     {
@@ -351,7 +351,7 @@ class TestCheckForUpdates:
                 "name": "Latest Development Build",
                 "draft": False,
                 "prerelease": True,
-                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "html_url": "https://github.com/MakeInc26/jarvis/releases/tag/latest",
                 "body": "Dev release notes",
                 "assets": [
                     {
@@ -585,8 +585,8 @@ class TestReleaseInfo:
             version="1.2.3",
             name="Version 1.2.3",
             prerelease=False,
-            html_url="https://github.com/isair/jarvis/releases/tag/v1.2.3",
-            download_url="https://github.com/isair/jarvis/releases/download/v1.2.3/Jarvis.zip",
+            html_url="https://github.com/MakeInc26/jarvis/releases/tag/v1.2.3",
+            download_url="https://github.com/MakeInc26/jarvis/releases/download/v1.2.3/Jarvis.zip",
             asset_name="Jarvis-macOS-arm64.zip",
             asset_size=52428800,
             release_notes="## Changes\n- Bug fixes",
