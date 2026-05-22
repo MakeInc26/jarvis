@@ -136,7 +136,7 @@ I have opened YouTube for you.
 
 ### 2. Download Jarvis
 
-Get the latest from [GitHub Releases](https://github.com/isair/jarvis/releases):
+Get the latest from [GitHub Releases](https://github.com/MakeInc26/jarvis/releases):
 
 | Platform | Download | Run |
 |----------|----------|-----|
@@ -544,7 +544,7 @@ Get API key at [composio.dev](https://composio.dev)
 <summary><strong>Running from source</strong></summary>
 
 ```bash
-git clone https://github.com/isair/jarvis.git
+git clone https://github.com/MakeInc26/jarvis.git
 cd jarvis
 
 # macOS

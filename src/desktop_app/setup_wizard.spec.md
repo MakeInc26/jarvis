@@ -19,7 +19,7 @@ The setup wizard is shown only when **user action is required** — it is not sh
 ## Page Flow
 
 ```
-Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → MCP Servers → Search Providers → [Location] → Complete
+Welcome → Provider → [Anthropic Setup] → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → MCP Servers → Search Providers → [Location] → Complete
 ```
 
 Pages in brackets are conditional — skipped when their prerequisite is already satisfied.
@@ -29,25 +29,31 @@ Pages in brackets are conditional — skipped when their prerequisite is already
 | # | Page | Condition to show | Config written |
 |---|------|-------------------|----------------|
 | 1 | **Welcome** | Always | — |
-| 2 | **Ollama Install** | CLI not found | — |
-| 3 | **Ollama Server** | Server not running | — |
-| 4 | **Models** | Always (user selects chat model) | `ollama_chat_model` |
-| 5 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
-| 6 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
-| 7 | **MCP Servers** | Always | `mcps` |
-| 8 | **Search Providers** | Always | `brave_search_api_key`, `wikipedia_fallback_enabled` |
-| 9 | **Location** | Location enabled but detection failing | `location_ip_address` |
-| 10 | **Complete** | Always | — |
+| 2 | **Provider** | Always | `llm_provider` |
+| 3 | **Anthropic Setup** | Provider is `anthropic` | `anthropic_api_key`, `anthropic_chat_model`, `llm_provider` |
+| 4 | **Ollama Install** | CLI not found (still required in Anthropic mode for embeddings) | — |
+| 5 | **Ollama Server** | Server not running | — |
+| 6 | **Models** | Always (skips chat-model selection in Anthropic mode) | `ollama_chat_model` (Ollama mode only) |
+| 7 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
+| 8 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
+| 9 | **MCP Servers** | Always | `mcps` |
+| 10 | **Search Providers** | Always | `brave_search_api_key`, `wikipedia_fallback_enabled` |
+| 11 | **Location** | Location enabled but detection failing | `location_ip_address` |
+| 12 | **Complete** | Always | — |
 
 ### Page Details
 
 **WelcomePage** — Status dashboard showing CLI, server, models, location, and MLX Whisper (Apple Silicon) readiness. Refresh button triggers a background `StatusCheckWorker`.
 
+**ProviderPage** — Choose between local (Ollama) and cloud (Anthropic Claude). Writes `llm_provider` to config. Anthropic mode skips the ~7 GB chat-model download but still requires Ollama for embeddings, so the Ollama install/server pages are still routed through.
+
+**AnthropicSetupPage** — Shown only when provider is `anthropic`. Collects the API key (password-masked) and Claude model (default `claude-sonnet-4-6`, plus Haiku and Opus options). Has a link to console.anthropic.com for getting a key. Writes `anthropic_api_key`, `anthropic_chat_model`, and re-writes `llm_provider` for safety.
+
 **OllamaInstallPage** — Platform-specific download instructions. Opens official download page. Verify button re-checks `check_ollama_cli()`.
 
 **OllamaServerPage** — Start button auto-starts Ollama (macOS: `open -a Ollama`, Windows: hidden `ollama serve`, Linux: terminal `ollama serve`). Verify button re-checks `check_ollama_server()`.
 
-**ModelsPage** — Displays `SUPPORTED_CHAT_MODELS` as selectable cards with VRAM requirements (including always-loaded intent judge overhead). Installs: selected chat model + embedding model (`nomic-embed-text`) + intent judge (`gemma4:e2b`). Progress bar and log output during `ollama pull`. User can skip if models are already present.
+**ModelsPage** — Displays `SUPPORTED_CHAT_MODELS` as selectable cards with VRAM requirements (including always-loaded intent judge overhead). In Ollama mode it installs: selected chat model + embedding model (`nomic-embed-text`) + intent judge (`gemma4:e2b`). In Anthropic mode the chat-model selection card is hidden and only the embedding model is pulled (the chat and intent-judge slots both run on Claude in the cloud). Progress bar and log output during `ollama pull`. User can skip if models are already present.
 
 **WhisperSetupPage** — Language mode toggle (multilingual vs English-only), then model size selection from hardcoded options. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons.
 

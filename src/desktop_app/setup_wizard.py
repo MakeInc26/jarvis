@@ -20,7 +20,7 @@ from enum import Enum, auto
 
 import requests
 
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, SUPPORTED_ANTHROPIC_MODELS, DEFAULT_ANTHROPIC_MODEL
 
 
 def is_apple_silicon() -> bool:
@@ -182,25 +182,31 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
 def get_required_models() -> List[str]:
     """Get list of required Ollama models from config.
 
-    Always includes:
+    In Anthropic provider mode the chat slot (and the intent judge slot,
+    which Anthropic mode collapses onto the same Claude model) runs in the
+    cloud, so only the embedding model needs to be pulled locally.
+
+    In Ollama mode the list is:
     - Chat model (user-selectable)
     - Embedding model
-    - Intent judge model (gemma4 - required for voice intent classification)
+    - Intent judge model (small local model for voice intent classification)
     """
     try:
         cfg = load_settings()
-        models = []
+        models: List[str] = []
 
-        # Chat model
-        if cfg.ollama_chat_model:
-            models.append(cfg.ollama_chat_model)
-
-        # Embedding model
+        # Embedding model — required regardless of provider; Anthropic has no
+        # embeddings API so memory graph + tool selection always go via Ollama.
         if cfg.ollama_embed_model:
             models.append(cfg.ollama_embed_model)
 
-        # Intent judge model - always required for voice intent classification
-        # This is separate from the chat model and cannot be changed by users
+        if getattr(cfg, "llm_provider", "ollama") == "anthropic":
+            return models
+
+        # Ollama mode: also need a chat model and an intent judge model.
+        if cfg.ollama_chat_model and cfg.ollama_chat_model not in models:
+            models.append(cfg.ollama_chat_model)
+
         intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
         if intent_judge_model and intent_judge_model not in models:
             models.append(intent_judge_model)
@@ -473,6 +479,8 @@ class SetupWizard(QWizard):
 
         # Add pages and store their IDs
         self.welcome_page = WelcomePage(self)
+        self.provider_page = ProviderPage(self)
+        self.anthropic_setup_page = AnthropicSetupPage(self)
         self.ollama_install_page = OllamaInstallPage(self)
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
@@ -484,6 +492,8 @@ class SetupWizard(QWizard):
         self.complete_page = CompletePage(self)
 
         self.welcome_page_id = self.addPage(self.welcome_page)
+        self.provider_page_id = self.addPage(self.provider_page)
+        self.anthropic_setup_page_id = self.addPage(self.anthropic_setup_page)
         self.ollama_install_page_id = self.addPage(self.ollama_install_page)
         self.ollama_server_page_id = self.addPage(self.ollama_server_page)
         self.models_page_id = self.addPage(self.models_page)
@@ -782,21 +792,323 @@ class WelcomePage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Determine next page based on status."""
+        """Always go to the provider choice page first.
+
+        The provider page itself decides where to route based on the user's
+        choice (Anthropic vs Ollama), so the existing Ollama-status skipping
+        logic moves down to ProviderPage.nextId().
+        """
         wizard = self.wizard()
-        if not isinstance(wizard, SetupWizard) or wizard.ollama_status is None:
-            return wizard.ollama_install_page_id
+        if isinstance(wizard, SetupWizard):
+            return wizard.provider_page_id
+        return super().nextId()
 
+
+class ProviderPage(QWizardPage):
+    """Choose between local (Ollama) and cloud (Anthropic) chat backends.
+
+    Writes `llm_provider` to config on commit. Routing afterwards:
+    - "anthropic" -> AnthropicSetupPage (API key) -> Ollama install/server
+      (still needed for embeddings) -> Models (embedding-only) -> ...
+    - "ollama"    -> existing Ollama install/server/models flow.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🧠 Choose Your LLM Provider")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Jarvis can run chat locally with Ollama or in the cloud with "
+            "Anthropic's Claude API. You can switch later from Settings."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(16)
+
+        # Two-card chooser
+        self._selected_provider: str = "ollama"
+        self._provider_buttons: Dict[str, QPushButton] = {}
+
+        for provider_id, info in (
+            ("ollama", {
+                "title": "🖥️  Local — Ollama",
+                "summary": "Fully offline. No API keys. Downloads a chat model (~7-12 GB) plus embeddings.",
+                "details": "Best for privacy. Requires a capable GPU (8 GB+ VRAM).",
+            }),
+            ("anthropic", {
+                "title": "☁️  Cloud — Anthropic Claude",
+                "summary": "Skip the 7 GB chat model download. Uses your Anthropic API key.",
+                "details": "Best for low-spec machines or top-tier quality. Still pulls a small embedding model (~270 MB) via Ollama.",
+            }),
+        ):
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setMinimumHeight(96)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setText(f"{info['title']}\n{info['summary']}\n{info['details']}")
+            btn.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    padding: 14px 18px;
+                    border: 2px solid #27272a;
+                    border-radius: 8px;
+                    background: #1a1d26;
+                    color: #e4e4e7;
+                    font-size: 13px;
+                    line-height: 1.5;
+                }
+                QPushButton:hover {
+                    border-color: #f59e0b;
+                    background: #1e222c;
+                }
+                QPushButton:checked {
+                    border-color: #f59e0b;
+                    background: rgba(245, 158, 11, 0.1);
+                }
+            """)
+            btn.clicked.connect(lambda checked, p=provider_id: self._on_provider_selected(p))
+            self._provider_buttons[provider_id] = btn
+            layout.addWidget(btn)
+
+        layout.addSpacing(8)
+        note = QLabel(
+            "ℹ️ Anthropic mode still uses Ollama for the embeddings model "
+            "(Anthropic does not expose an embeddings API). The wizard will "
+            "still walk you through installing Ollama, just without the big "
+            "chat model download."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0 4px;")
+        layout.addWidget(note)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def initializePage(self):
+        # Reflect the currently configured provider so re-running the wizard
+        # is a no-op for users who already picked one.
+        try:
+            cfg = load_settings()
+            current = getattr(cfg, "llm_provider", "ollama")
+        except Exception:
+            current = "ollama"
+        if current not in self._provider_buttons:
+            current = "ollama"
+        self._on_provider_selected(current)
+
+    def _on_provider_selected(self, provider_id: str) -> None:
+        self._selected_provider = provider_id
+        for pid, btn in self._provider_buttons.items():
+            btn.setChecked(pid == provider_id)
+
+    def isComplete(self) -> bool:
+        return bool(self._selected_provider)
+
+    def validatePage(self) -> bool:
+        """Persist the chosen provider to config.json."""
+        try:
+            from jarvis.config import _load_json, _save_json
+            cfg_path = default_config_path()
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            config = _load_json(cfg_path) or {}
+            config["llm_provider"] = self._selected_provider
+            _save_json(cfg_path, config)
+        except Exception:
+            pass
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        if self._selected_provider == "anthropic":
+            return wizard.anthropic_setup_page_id
+        # Ollama: replicate the legacy "skip to where the gap is" logic.
         status = wizard.ollama_status
-
-        # Skip to appropriate page based on what's missing
-        if not status.is_cli_installed:
+        if status is None or not status.is_cli_installed:
             return wizard.ollama_install_page_id
-        elif not status.is_server_running:
+        if not status.is_server_running:
             return wizard.ollama_server_page_id
+        return wizard.models_page_id
+
+
+class AnthropicSetupPage(QWizardPage):
+    """Collect the Anthropic API key and chat model when provider == anthropic."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔑 Anthropic API Setup")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Paste your Anthropic API key and pick the Claude model that "
+            "should handle your chat. You can change either later in Settings."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(16)
+
+        # API key card
+        key_card = QFrame()
+        key_card.setObjectName("card")
+        key_layout = QVBoxLayout(key_card)
+        key_layout.setContentsMargins(24, 24, 24, 24)
+        key_layout.setSpacing(12)
+
+        key_title = QLabel("🔐 API Key")
+        key_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        key_layout.addWidget(key_title)
+
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("sk-ant-...")
+        self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_input.textChanged.connect(self._on_key_changed)
+        key_layout.addWidget(self.key_input)
+
+        get_key_btn = QPushButton("🌐 Get an API Key (console.anthropic.com)")
+        get_key_btn.setObjectName("secondary")
+        get_key_btn.clicked.connect(lambda: webbrowser.open("https://console.anthropic.com/settings/keys"))
+        key_layout.addWidget(get_key_btn)
+
+        key_note = QLabel(
+            "Your key is stored in plain text at ~/.config/jarvis/config.json "
+            "(or %APPDATA%\\jarvis\\config.json on Windows). Treat that file "
+            "like a password."
+        )
+        key_note.setWordWrap(True)
+        key_note.setStyleSheet("font-size: 11px; color: #71717a;")
+        key_layout.addWidget(key_note)
+
+        layout.addWidget(key_card)
+
+        # Model picker card
+        model_card = QFrame()
+        model_card.setObjectName("card")
+        model_layout = QVBoxLayout(model_card)
+        model_layout.setContentsMargins(24, 24, 24, 24)
+        model_layout.setSpacing(12)
+
+        model_title = QLabel("🎯 Choose Claude Model")
+        model_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        model_layout.addWidget(model_title)
+
+        self._selected_model: str = DEFAULT_ANTHROPIC_MODEL
+        self._model_buttons: Dict[str, QPushButton] = {}
+        for model_id, info in SUPPORTED_ANTHROPIC_MODELS.items():
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setMinimumHeight(64)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setText(f"{info['name']}\n{info['description']}")
+            btn.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    padding: 12px 16px;
+                    border: 2px solid #27272a;
+                    border-radius: 8px;
+                    background: #1a1d26;
+                    color: #e4e4e7;
+                    font-size: 13px;
+                    line-height: 1.4;
+                }
+                QPushButton:hover {
+                    border-color: #f59e0b;
+                    background: #1e222c;
+                }
+                QPushButton:checked {
+                    border-color: #f59e0b;
+                    background: rgba(245, 158, 11, 0.1);
+                }
+            """)
+            btn.clicked.connect(lambda checked, m=model_id: self._on_model_selected(m))
+            self._model_buttons[model_id] = btn
+            model_layout.addWidget(btn)
+
+        layout.addWidget(model_card)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def initializePage(self):
+        # Preload existing values so re-running the wizard does not blank them.
+        try:
+            cfg = load_settings()
+            existing_key = getattr(cfg, "anthropic_api_key", "") or ""
+            existing_model = getattr(cfg, "anthropic_chat_model", DEFAULT_ANTHROPIC_MODEL)
+        except Exception:
+            existing_key = ""
+            existing_model = DEFAULT_ANTHROPIC_MODEL
+        self.key_input.setText(existing_key)
+        if existing_model in self._model_buttons:
+            self._on_model_selected(existing_model)
         else:
-            # Always show models page so users can change their model selection
-            return wizard.models_page_id
+            self._on_model_selected(DEFAULT_ANTHROPIC_MODEL)
+
+    def _on_key_changed(self, _text: str) -> None:
+        self.completeChanged.emit()
+
+    def _on_model_selected(self, model_id: str) -> None:
+        self._selected_model = model_id
+        for mid, btn in self._model_buttons.items():
+            btn.setChecked(mid == model_id)
+
+    def isComplete(self) -> bool:
+        # The "Next" button requires a non-empty key. Letting users continue
+        # with a blank key would just produce a broken first chat call.
+        return bool(self.key_input.text().strip())
+
+    def validatePage(self) -> bool:
+        try:
+            from jarvis.config import _load_json, _save_json
+            cfg_path = default_config_path()
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            config = _load_json(cfg_path) or {}
+            config["anthropic_api_key"] = self.key_input.text().strip()
+            config["anthropic_chat_model"] = self._selected_model
+            # Make sure the provider is set too, even if the user reached this
+            # page via Back from a later step that wiped state.
+            config["llm_provider"] = "anthropic"
+            _save_json(cfg_path, config)
+        except Exception as e:
+            self.status_label.setText(f"⚠️ Could not save API key to config: {e}")
+            self.status_label.setStyleSheet("color: #fbbf24;")
+            return True
+        return True
+
+    def nextId(self) -> int:
+        """Still need Ollama installed/running for the embedding model."""
+        wizard = self.wizard()
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        status = wizard.ollama_status
+        if status is None or not status.is_cli_installed:
+            return wizard.ollama_install_page_id
+        if not status.is_server_running:
+            return wizard.ollama_server_page_id
+        return wizard.models_page_id
 
 
 class OllamaInstallPage(QWizardPage):
@@ -1174,12 +1486,14 @@ class ModelsPage(QWizardPage):
 
         layout.addSpacing(20)
 
-        # Model selection card
-        selection_card = QFrame()
-        selection_card.setObjectName("card")
+        # Model selection card. Hidden in Anthropic provider mode where the
+        # chat model lives in the cloud and only the embedding model needs to
+        # be pulled locally — see `initializePage`.
+        self.selection_card = QFrame()
+        self.selection_card.setObjectName("card")
         # Override card padding to prevent layout issues
-        selection_card.setStyleSheet(selection_card.styleSheet() + "QFrame#card { padding: 0px; }")
-        selection_layout = QVBoxLayout(selection_card)
+        self.selection_card.setStyleSheet(self.selection_card.styleSheet() + "QFrame#card { padding: 0px; }")
+        selection_layout = QVBoxLayout(self.selection_card)
         selection_layout.setContentsMargins(24, 24, 24, 24)
         selection_layout.setSpacing(16)
 
@@ -1232,7 +1546,7 @@ class ModelsPage(QWizardPage):
         ram_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
         selection_layout.addWidget(ram_note)
 
-        layout.addWidget(selection_card)
+        layout.addWidget(self.selection_card)
 
         # Model list card
         card = QFrame()
@@ -1314,16 +1628,18 @@ class ModelsPage(QWizardPage):
         self._update_models_display()
 
     def _update_models_display(self):
-        """Update the models display based on selected model."""
+        """Update the models display based on selected model and provider."""
         wizard = self.wizard()
 
         # Get config values
         embed_model = "nomic-embed-text"
         intent_judge_model = "gemma4:e2b"
+        provider = "ollama"
         try:
             cfg = load_settings()
             embed_model = cfg.ollama_embed_model
             intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
+            provider = getattr(cfg, "llm_provider", "ollama")
         except Exception:
             pass
 
@@ -1332,11 +1648,16 @@ class ModelsPage(QWizardPage):
         if isinstance(wizard, SetupWizard) and wizard.ollama_status:
             installed = wizard.ollama_status.installed_models
 
-        # Required models: selected chat model + embed model + intent judge model
-        # Intent judge (gemma4) is always required for voice intent classification
-        required = [self._selected_model, embed_model]
-        if intent_judge_model and intent_judge_model not in required:
-            required.append(intent_judge_model)
+        # Required models: depends on provider.
+        # - Anthropic: only the embedding model (the chat slot and the intent
+        #   judge slot both run on Claude; see jarvis/llm.py provider routing).
+        # - Ollama: selected chat model + embed model + intent judge.
+        if provider == "anthropic":
+            required = [embed_model]
+        else:
+            required = [self._selected_model, embed_model]
+            if intent_judge_model and intent_judge_model not in required:
+                required.append(intent_judge_model)
 
         # Check which are missing
         def normalize_model(name: str) -> str:
@@ -1385,7 +1706,12 @@ class ModelsPage(QWizardPage):
         self.completeChanged.emit()
 
     def _save_model_to_config(self):
-        """Save the selected chat model to config file."""
+        """Save the selected chat model to config file.
+
+        No-op in Anthropic mode — the chat model is configured on the
+        AnthropicSetupPage, and writing `ollama_chat_model` here would just
+        leave a misleading value in config.json.
+        """
         try:
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1396,7 +1722,8 @@ class ModelsPage(QWizardPage):
             else:
                 config = {}
 
-            config["ollama_chat_model"] = self._selected_model
+            if config.get("llm_provider", "ollama") != "anthropic":
+                config["ollama_chat_model"] = self._selected_model
 
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
@@ -1407,13 +1734,24 @@ class ModelsPage(QWizardPage):
 
     def initializePage(self):
         """Initialize page with current model status."""
-        # Load the currently configured chat model
+        # Load the currently configured chat model + provider
         current_chat_model = DEFAULT_CHAT_MODEL
+        provider = "ollama"
         try:
             cfg = load_settings()
             current_chat_model = cfg.ollama_chat_model
+            provider = getattr(cfg, "llm_provider", "ollama")
         except Exception:
             pass
+
+        # In Anthropic mode the chat model lives in the cloud, so hide the
+        # local-model picker entirely. Only the embedding model gets pulled.
+        self.selection_card.setVisible(provider != "anthropic")
+
+        # Adjust the headline so users in Anthropic mode see the right framing.
+        # The subtitle widget is the second top-level widget added in __init__.
+        if provider == "anthropic":
+            self.setTitle("")  # keep custom title widgets, just reset Qt's
 
         # Pre-select the model if it's one of our options, otherwise default
         if current_chat_model in self.MODEL_OPTIONS:
