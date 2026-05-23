@@ -298,6 +298,45 @@ class TestLogViewerReportIssue:
     and block in test environments.
     """
 
+    def test_issue_url_stays_under_github_limit_with_huge_logs(self):
+        """GitHub rejects issue URLs over ~8KB ('Your request URL is too long').
+        Even a massive emoji/newline-heavy log (which inflates ~3-9x when
+        percent-encoded) must produce a URL within the cap."""
+        from desktop_app.app import _build_issue_url, _ISSUE_LOGS_SENTINEL, _ISSUE_URL_MAX_LEN
+
+        # 40k chars of the kind of content that blows up when encoded.
+        huge_logs = ("🚀 Jarvis daemon started\n📝 Heard something\n" * 1500)
+        body = f"## Bug Report\n\n### Logs\n```\n{_ISSUE_LOGS_SENTINEL}\n```\n"
+
+        url = _build_issue_url("Bug Report", body, huge_logs, "bug")
+
+        assert len(url) <= _ISSUE_URL_MAX_LEN
+        assert url.startswith("https://github.com/MakeInc26/jarvis/issues/new?")
+
+    def test_issue_url_includes_logs_when_they_fit(self):
+        import urllib.parse
+        from desktop_app.app import _build_issue_url, _ISSUE_LOGS_SENTINEL
+
+        body = f"## Bug Report\n```\n{_ISSUE_LOGS_SENTINEL}\n```\n"
+        url = _build_issue_url("Bug Report", body, "tiny log line", "bug")
+
+        decoded = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)['body'][0]
+        assert "tiny log line" in decoded
+        assert _ISSUE_LOGS_SENTINEL not in decoded  # sentinel was substituted
+
+    def test_issue_url_drops_logs_with_note_when_unavoidably_long(self):
+        """If even a minimal log block can't fit (pathological case), the logs
+        are dropped with a paste-manually note rather than producing a bad URL."""
+        import urllib.parse
+        from desktop_app.app import _build_issue_url, _ISSUE_LOGS_SENTINEL, _ISSUE_URL_MAX_LEN
+
+        body = f"```\n{_ISSUE_LOGS_SENTINEL}\n```"
+        url = _build_issue_url("Bug Report", body, "🔥" * 20000, "bug")
+
+        assert len(url) <= _ISSUE_URL_MAX_LEN
+        decoded = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)['body'][0]
+        assert "too long to include automatically" in decoded
+
     def test_report_issue_url_generation(self):
         """Report issue should generate correct GitHub issue URL with redacted content."""
         import urllib.parse

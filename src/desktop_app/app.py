@@ -201,6 +201,36 @@ def _truncate_logs_for_report(logs: str, max_len: int) -> str:
     return fixed_parts + tail_part
 
 
+# GitHub rejects "new issue" URLs over ~8 KB with "Your request URL is too long".
+# A raw character cap on the logs is not enough: percent-encoding inflates them
+# (one emoji -> 9 bytes, each newline -> 3 bytes), so a 5000-char log block can
+# blow well past the limit once encoded.
+_ISSUE_URL_BASE = "https://github.com/MakeInc26/jarvis/issues/new?"
+_ISSUE_LOGS_SENTINEL = "__JARVIS_LOGS__"
+_ISSUE_URL_MAX_LEN = 7800
+
+
+def _build_issue_url(title: str, body_with_sentinel: str, logs: str, labels: str) -> str:
+    """Build a 'new issue' URL whose final encoded length stays under GitHub's
+    cap. ``body_with_sentinel`` must contain ``_ISSUE_LOGS_SENTINEL`` where the
+    log block goes; the logs are trimmed against the *encoded* URL length and, if
+    even a small block still overflows, dropped with a note to paste manually."""
+    def _url_for(log_text: str) -> str:
+        # Escape backtick fences so log content can't break out of the code block.
+        body = body_with_sentinel.replace(_ISSUE_LOGS_SENTINEL, log_text.replace('```', '`` `'))
+        params = urllib.parse.urlencode({'title': title, 'body': body, 'labels': labels})
+        return _ISSUE_URL_BASE + params
+
+    for budget in (5000, 3500, 2500, 1500, 800):
+        url = _url_for(_truncate_logs_for_report(logs, budget))
+        if len(url) <= _ISSUE_URL_MAX_LEN:
+            return url
+    return _url_for(
+        "(Logs were too long to include automatically. Please copy them from the "
+        "Jarvis log window and paste them here.)"
+    )
+
+
 def setup_crash_logging():
     """Set up crash logging for the bundled app to capture startup errors."""
     if getattr(sys, 'frozen', False):
@@ -425,12 +455,6 @@ def show_crash_report_dialog(crash_content: str) -> None:
                 except Exception:
                     version = "unknown"
 
-                # Truncate crash info for URL (GitHub has limits)
-                # Keep init lines + recent tail (recent logs are most useful for debugging)
-                truncated = _truncate_logs_for_report(self.crash_info, 4000)
-                # Escape backtick fences so log content can't break out of the code block
-                truncated = truncated.replace('```', '`` `')
-
                 title = "Crash Report"
                 body = f"""## Crash Report
 
@@ -439,7 +463,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
 
 ### Crash Log
 ```
-{truncated}
+{_ISSUE_LOGS_SENTINEL}
 ```
 
 ### Steps to Reproduce
@@ -452,14 +476,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
 ### Additional Context
 (Any other relevant information)
 """
-                # URL encode
-                params = urllib.parse.urlencode({
-                    'title': title,
-                    'body': body,
-                    'labels': 'bug,crash'
-                })
-                url = f"https://github.com/MakeInc26/jarvis/issues/new?{params}"
-
+                url = _build_issue_url(title, body, self.crash_info, 'bug,crash')
                 webbrowser.open(url)
                 self.accept()
 
@@ -881,12 +898,6 @@ class LogViewerWindow(QMainWindow):
         for pattern, repl in _REDACTION_RULES:
             redacted_logs = pattern.sub(repl, redacted_logs)
 
-        # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
-        # Keep init lines + recent tail (recent logs are most useful for debugging)
-        redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
-        # Escape backtick fences so log content can't break out of the code block
-        redacted_logs = redacted_logs.replace('```', '`` `')
-
         title = "Bug Report"
         body = f"""## Bug Report
 
@@ -907,7 +918,7 @@ class LogViewerWindow(QMainWindow):
 <summary>📋 Logs (click to expand)</summary>
 
 ```
-{redacted_logs}
+{_ISSUE_LOGS_SENTINEL}
 ```
 
 </details>
@@ -915,13 +926,7 @@ class LogViewerWindow(QMainWindow):
 ### Additional Context
 (Any other relevant information)
 """
-        params = urllib.parse.urlencode({
-            'title': title,
-            'body': body,
-            'labels': 'bug'
-        })
-        url = f"https://github.com/MakeInc26/jarvis/issues/new?{params}"
-
+        url = _build_issue_url(title, body, redacted_logs, 'bug')
         webbrowser.open(url)
 
 
