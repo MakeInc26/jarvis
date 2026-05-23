@@ -1497,6 +1497,18 @@ class VoiceListener(threading.Thread):
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
 
+        # In Anthropic mode the chat slot and tool router run on Anthropic (no
+        # local weights to preload) and the intent judge is disabled, so there is
+        # nothing to warm on Ollama. Skipping avoids three spurious "warmup
+        # failed" lines for a gemma model the Anthropic setup never pulls.
+        if str(getattr(self.cfg, "llm_provider", "ollama") or "ollama").strip().lower() == "anthropic":
+            debug_log(
+                "LLM warmup skipped: llm_provider=anthropic "
+                "(chat + router use Anthropic, intent judge disabled)",
+                "voice",
+            )
+            return []
+
         chat_model = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
         base_url = str(getattr(self.cfg, "ollama_base_url", "") or "").strip()
         chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)

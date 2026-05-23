@@ -1833,3 +1833,21 @@ class TestWeatherBannerExample:
 
         listener2 = self._make_listener(location_enabled=False)
         assert "Helix?" in listener2._weather_example("Helix")
+
+
+class TestLLMWarmupProviderRouting:
+    """In Anthropic mode the chat slot and tool router run on Anthropic and the
+    intent judge is disabled, so the Ollama warmup must be skipped entirely
+    rather than failing on a gemma model the Anthropic setup never pulls."""
+
+    def test_warmup_skipped_in_anthropic_mode(self):
+        from types import SimpleNamespace
+        from jarvis.listening.listener import VoiceListener
+
+        stub = SimpleNamespace(cfg=SimpleNamespace(llm_provider="anthropic"))
+        threads = VoiceListener._start_llm_warmup(stub)
+
+        assert threads == []
+        # No Ollama warmups were attempted, so no results were recorded — which
+        # is what keeps the startup banner free of "warmup failed" lines.
+        assert stub._llm_warmup_results == {}

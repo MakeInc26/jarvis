@@ -504,6 +504,16 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
     Returns:
         IntentJudge instance or None if requests library unavailable
     """
+    # The intent judge calls Ollama directly with a small local model and runs
+    # on every utterance in the hot window. In Anthropic mode the setup wizard
+    # provisions no local chat/intent model, so the judge would 404 on each
+    # utterance; routing it to the cloud instead would add latency and cost to
+    # every bit of ambient speech, which defeats the point of a fast local
+    # check. Disable it and let the wake-word + hot-window path detect intent.
+    if str(getattr(cfg, "llm_provider", "ollama") or "ollama").strip().lower() == "anthropic":
+        debug_log("intent judge disabled: llm_provider=anthropic (no local model)", "voice")
+        return None
+
     model = str(getattr(cfg, "intent_judge_model", "gemma4:e2b"))
     ollama_base_url = str(getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"))
 

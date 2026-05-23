@@ -11,7 +11,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Backends**:
   - `"ollama"` (default): `POST {ollama_base_url}/api/chat`, no auth, `options.num_ctx` and `think` on the payload, OpenAI-style tools.
   - `"anthropic"`: `POST {anthropic_base_url}/messages` with `x-api-key` + `anthropic-version` headers. System prompts are lifted out of the messages array into the top-level `system` field. Tools are translated to Anthropic's `input_schema` shape. The response is normalised back to the Ollama chat shape (`{message: {content, tool_calls[*].function.{name, arguments}}}`) so every downstream context (#1 through #12) stays provider-agnostic.
-- **Model resolution**: in Anthropic mode the per-call `chat_model` argument is **ignored**. Every chat slot (main reply, intent judge, planner, evaluator, router, dictation cleaner) runs on `cfg.anthropic_chat_model`. The `intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model` knobs only take effect under Ollama; for Anthropic they collapse to a single Claude model.
+- **Model resolution**: in Anthropic mode the per-call `chat_model` argument is **ignored**. The provider-routed chat slots (main reply, planner, evaluator, tool router) run on `cfg.anthropic_chat_model`; their `*_model` knobs (`tool_router_model`, `evaluator_model`, `planner_model`) only take effect under Ollama. **The intent judge and dictation cleaner are local-only**: they call Ollama directly because they are latency-sensitive per-engagement classifiers, and routing them to the cloud would add a network round-trip and per-utterance cost to every wake/keystroke. In Anthropic mode the setup wizard provisions no local model for them, so they are disabled and fall back to their non-LLM paths (wake-word + hot-window detection for the judge; passthrough for the cleaner). See §2.
 - **Embeddings**: always Ollama. The contexts that call `get_embedding()` (#6 memory enrichment ranking, #10 tool selection's embedding strategy, conversation summarisation hooks) require `ollama_base_url` + `ollama_embed_model` regardless of `llm_provider`. Anthropic does not expose an embeddings API.
 - **Error mapping**: Anthropic's HTTP 400 on a tools call is rethrown as `ToolsNotSupportedError` so the reply engine's text-mode tool-call fallback path still triggers.
 
@@ -38,7 +38,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/listening/intent_judge.py](src/jarvis/listening/intent_judge.py) — `IntentJudge.evaluate()`.
 - **Trigger**: on a speech segment *only if* there is an engagement signal (wake word detected, hot-window active, or TTS playing). Pure ambient speech skips it.
-- **Model / gating**: `cfg.intent_judge_model` (default `gemma4:e2b`, ~2B). Falls back to text-based wake detection if Ollama is unavailable.
+- **Model / gating**: `cfg.intent_judge_model` (default `gemma4:e2b`, ~2B), always via Ollama. Falls back to text-based wake detection if Ollama is unavailable. **Disabled entirely when `llm_provider == "anthropic"`** (`create_intent_judge` returns `None`): the wizard provisions no local model in that mode, so direction detection relies on wake word + hot-window state rather than paying a cloud round-trip on every engaged utterance.
 - **Inputs**:
   - Rolling transcript buffer (last 120s, with timestamps)
   - Wake-word timestamp (if any), normalised aliases

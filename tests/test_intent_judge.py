@@ -524,6 +524,7 @@ class TestCreateIntentJudge:
     def test_always_returns_judge_when_requests_available(self):
         """Always returns judge when requests library is available (per spec)."""
         mock_cfg = MagicMock()
+        mock_cfg.llm_provider = "ollama"
         mock_cfg.intent_judge_model = "gemma4:e2b"
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.intent_judge_timeout_sec = 3.0
@@ -533,6 +534,22 @@ class TestCreateIntentJudge:
         judge = create_intent_judge(mock_cfg)
         # Judge should always be created (per spec - falls back only when unavailable)
         assert judge is not None
+
+    def test_returns_none_in_anthropic_mode(self):
+        """In Anthropic mode the wizard provisions no local intent-judge model,
+        so the judge is disabled to avoid a per-utterance Ollama 404. The
+        wake-word + hot-window path handles direction detection instead."""
+        mock_cfg = MagicMock()
+        mock_cfg.llm_provider = "anthropic"
+        mock_cfg.intent_judge_model = "gemma4:e2b"
+        mock_cfg.ollama_base_url = "http://localhost:11434"
+
+        assert create_intent_judge(mock_cfg) is None
+
+    def test_anthropic_mode_is_case_insensitive(self):
+        mock_cfg = MagicMock()
+        mock_cfg.llm_provider = "Anthropic"
+        assert create_intent_judge(mock_cfg) is None
 
 
 class TestWarmUp:
