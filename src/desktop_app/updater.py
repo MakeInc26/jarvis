@@ -318,12 +318,26 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
 
     except requests.RequestException as e:
         debug_log(f"Failed to check for updates: {e}", "updater")
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        if status_code == 404:
+            # GitHub returns 404 (not 403) for a private repo accessed without
+            # auth, so an unauthenticated in-app check can't see a private fork's
+            # releases. Say so plainly and point at the manual path instead of
+            # surfacing a bare "404 Not Found".
+            error_message = (
+                "Update repository not found. It may be private — in-app update "
+                "checks are unauthenticated and cannot see a private repository's "
+                "releases. Download the latest release manually from the project's "
+                "Releases page, or make the repository public to enable auto-update."
+            )
+        else:
+            error_message = str(e)
         return UpdateStatus(
             update_available=False,
             current_version=current_version,
             current_channel=current_channel,
             latest_release=None,
-            error=str(e),
+            error=error_message,
         )
 
 

@@ -240,6 +240,26 @@ class TestCheckForUpdates:
                 assert status.error is not None
                 assert "Network error" in status.error
 
+    def test_private_repo_404_gives_actionable_message(self):
+        """GitHub returns 404 for a private repo hit without auth. Surface a
+        clear, actionable message rather than a bare '404 Not Found'."""
+        import requests
+
+        err = requests.exceptions.HTTPError("404 Client Error: Not Found for url: x")
+        err.response = MagicMock()
+        err.response.status_code = 404
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = err
+
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
+            with patch("requests.get", return_value=mock_response):
+                status = check_for_updates()
+                assert status.update_available is False
+                assert status.error is not None
+                assert "private" in status.error.lower()
+                # The raw HTTP code should not leak into the user-facing message.
+                assert "404" not in status.error
+
     @pytest.mark.unit
     def test_handles_missing_platform_asset(self):
         mock_response = MagicMock()
