@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - develop
+  # Manual trigger so a release build can be kicked off from the Actions tab
+  # without a new commit (e.g. after enabling Actions / making the repo public).
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
