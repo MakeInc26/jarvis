@@ -248,6 +248,47 @@ def _anthropic_build_payload(
     return payload
 
 
+def _anthropic_error_detail(resp: Any) -> str:
+    """Extract Anthropic's human-readable error message from a failed response.
+
+    Anthropic returns ``{"type":"error","error":{"type":...,"message":...}}`` on
+    every 4xx/5xx. Surfacing that ``message`` turns an opaque "400 Bad Request"
+    into the actual cause (an out-of-range field, an inaccessible model, a
+    malformed block). Falls back to the raw body then the status line so the
+    signal is never lost.
+    """
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                return f"{err.get('type') or 'error'}: {err['message']}"
+            if body.get("message"):
+                return str(body["message"])
+    except Exception:
+        pass
+    try:
+        text = resp.text
+        if text:
+            return text[:500]
+    except Exception:
+        pass
+    return f"HTTP {getattr(resp, 'status_code', '?')}"
+
+
+def _is_tools_error(detail: str) -> bool:
+    """True when a 400 concerns the tools/schema rather than the base payload.
+
+    Only a genuine tool/schema rejection should trip the engine's text-mode
+    tool fallback. Every current Claude model supports native tools, so a 400
+    that does *not* mention tools is a malformed-request signal (e.g. a bad
+    ``max_tokens``); treating it as "tools not supported" both masks the real
+    cause and needlessly drops native tool calling for the rest of the session.
+    """
+    d = (detail or "").lower()
+    return "tool" in d or "input_schema" in d
+
+
 def _call_anthropic_chat(
     messages: List[Dict[str, Any]],
     timeout_sec: float,
@@ -268,13 +309,17 @@ def _call_anthropic_chat(
 
     try:
         with requests.post(url, json=payload, headers=headers, timeout=timeout_sec) as resp:
-            if resp.status_code == 400 and tools:
-                # Surface a tool-incompatibility signal that mirrors the Ollama
-                # path so the reply engine's text-mode fallback can kick in.
-                raise ToolsNotSupportedError(
-                    f"Anthropic API returned HTTP 400 with tools — {resp.text[:200] if hasattr(resp, 'text') else ''}"
-                )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                detail = _anthropic_error_detail(resp)
+                debug_log(f"anthropic: HTTP {resp.status_code} — {detail}", "llm")
+                # Only treat a 400 as a tools-incompatibility signal (which trips
+                # the engine's text-mode fallback) when the error actually names
+                # the tools/schema. Otherwise surface the real reason instead of
+                # hiding it behind a misleading "tools not supported".
+                if resp.status_code == 400 and tools and _is_tools_error(detail):
+                    raise ToolsNotSupportedError(f"Anthropic rejected tools — {detail}")
+                print(f"  ❌ LLM error: Anthropic HTTP {resp.status_code} — {detail}", flush=True)
+                return None
             data = resp.json()
         if isinstance(data, dict):
             return _anthropic_to_ollama_response(data)
@@ -318,7 +363,11 @@ def _call_anthropic_stream(
     text_parts: List[str] = []
     try:
         with requests.post(url, json=payload, headers=headers, timeout=timeout_sec, stream=True) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                detail = _anthropic_error_detail(resp)
+                debug_log(f"anthropic stream: HTTP {resp.status_code} — {detail}", "llm")
+                print(f"  ❌ LLM error: Anthropic HTTP {resp.status_code} — {detail}", flush=True)
+                return None
             for raw in resp.iter_lines(decode_unicode=True):
                 if not raw:
                     continue

@@ -281,6 +281,78 @@ class TestAnthropicMessageTranslation:
         assert tu["input"] == {"city": "Tbilisi"}
 
 
+def _mock_anthropic_error(status_code: int, error_type: str, message: str) -> MagicMock:
+    """Build a requests.Response-like mock for an Anthropic error response."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    body = {"type": "error", "error": {"type": error_type, "message": message}}
+    resp.json.return_value = body
+    resp.text = json.dumps(body)
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+class TestAnthropicErrorSurfacing:
+    """A failed Anthropic call must surface the API's own explanation, not an
+    opaque '400 Bad Request'. Without the body the real cause (out-of-range
+    field, inaccessible model, malformed block) is invisible to the user."""
+
+    @patch("jarvis.llm.requests.post")
+    def test_non_tools_400_surfaces_message_and_returns_none(self, mock_post, capsys):
+        _set_anthropic()
+        mock_post.return_value = _mock_anthropic_error(
+            400, "invalid_request_error",
+            "max_tokens: 200000 > 64000, which is the maximum allowed",
+        )
+
+        out = chat_with_messages("http://ignored", "ignored", [{"role": "user", "content": "hi"}])
+
+        assert out is None
+        printed = capsys.readouterr().out
+        assert "max_tokens" in printed
+        assert "64000" in printed
+
+    @patch("jarvis.llm.requests.post")
+    def test_base_payload_400_with_tools_is_not_misclassified_as_tools_error(self, mock_post, capsys):
+        """A 400 whose message does not concern tools must NOT raise
+        ToolsNotSupportedError just because tools were attached — that hid the
+        real cause and permanently dropped native tool calling."""
+        _set_anthropic()
+        mock_post.return_value = _mock_anthropic_error(
+            400, "invalid_request_error", "max_tokens: must be greater than 0",
+        )
+
+        tools = [{"type": "function", "function": {"name": "x", "description": "", "parameters": {}}}]
+        # Must not raise; must return None and surface the reason.
+        out = chat_with_messages("http://ignored", "ignored", [{"role": "user", "content": "hi"}], tools=tools)
+        assert out is None
+        assert "max_tokens" in capsys.readouterr().out
+
+    @patch("jarvis.llm.requests.post")
+    def test_tools_schema_400_still_raises_tools_not_supported(self, mock_post):
+        """When the 400 actually names the tools/schema, preserve the
+        text-mode fallback signal the engine relies on."""
+        _set_anthropic()
+        mock_post.return_value = _mock_anthropic_error(
+            400, "invalid_request_error",
+            "tools.0.input_schema: invalid JSON schema",
+        )
+
+        tools = [{"type": "function", "function": {"name": "x", "description": "", "parameters": {}}}]
+        with pytest.raises(llm_module.ToolsNotSupportedError):
+            chat_with_messages("http://ignored", "ignored", [{"role": "user", "content": "hi"}], tools=tools)
+
+    @patch("jarvis.llm.requests.post")
+    def test_401_surfaces_authentication_error(self, mock_post, capsys):
+        _set_anthropic()
+        mock_post.return_value = _mock_anthropic_error(401, "authentication_error", "invalid x-api-key")
+
+        out = call_llm_direct("http://ignored", "ignored", "sys", "hi")
+        assert out is None
+        assert "authentication_error" in capsys.readouterr().out
+
+
 class TestAnthropicToolSchema:
     @patch("jarvis.llm.requests.post")
     def test_openai_tools_translated_to_anthropic_input_schema(self, mock_post):
@@ -413,6 +485,7 @@ class TestAnthropicStreaming:
             yield ""
 
         resp = MagicMock()
+        resp.status_code = 200
         resp.raise_for_status = MagicMock()
         resp.iter_lines.return_value = list(_sse_lines())
         resp.__enter__ = MagicMock(return_value=resp)
