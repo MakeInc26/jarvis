@@ -353,6 +353,100 @@ class TestAnthropicErrorSurfacing:
         assert "authentication_error" in capsys.readouterr().out
 
 
+def _assert_no_orphan_tool_use(messages):
+    """Encode Anthropic's hard constraint: every tool_use block must be
+    immediately followed by a user message containing a tool_result with the
+    matching id. An orphan here is exactly what produced the production 400s."""
+    for i, m in enumerate(messages):
+        content = m.get("content")
+        if m.get("role") == "assistant" and isinstance(content, list):
+            tool_ids = [b["id"] for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            if not tool_ids:
+                continue
+            assert i + 1 < len(messages), f"tool_use at index {i} has no following message"
+            nxt = messages[i + 1]
+            assert nxt.get("role") == "user", f"tool_use must be followed by a user turn, got {nxt.get('role')!r}"
+            ncontent = nxt.get("content")
+            assert isinstance(ncontent, list), "tool_use must be followed by tool_result blocks, not text"
+            result_ids = [b.get("tool_use_id") for b in ncontent if isinstance(b, dict) and b.get("type") == "tool_result"]
+            for tid in tool_ids:
+                assert tid in result_ids, f"tool_use id {tid!r} has no matching tool_result"
+
+
+class TestAnthropicToolUsePairing:
+    """Regression for the production 400: once a tool ran, the assistant
+    tool_use was followed by a plain '[Tool result]' user message (the Ollama
+    convention) rather than a tool_result block, orphaning the tool_use and
+    making every subsequent Anthropic request fail."""
+
+    def test_direct_exec_user_text_result_is_paired_as_tool_result(self):
+        # Mirrors the planner direct-exec injection in engine.py.
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "what's the temperature in Montreal"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_plan_abc123", "type": "function",
+                     "function": {"name": "getWeather", "arguments": {"location": "Montreal"}}}
+                ],
+            },
+            {"role": "user", "content": "[Tool result: getWeather]\nOvercast, 20.0C",
+             "tool_name": "getWeather", "tool_failed": False},
+            {"role": "user", "content": "how are you"},
+        ]
+        _system, out = llm_module._messages_to_anthropic(messages)
+        _assert_no_orphan_tool_use(out)
+        # The tool_use is paired to a tool_result that preserves the result text.
+        tu = next(b for msg in out if isinstance(msg.get("content"), list)
+                  for b in msg["content"] if b.get("type") == "tool_use")
+        tr = next(b for msg in out if isinstance(msg.get("content"), list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+        assert tr["tool_use_id"] == tu["id"] == "call_plan_abc123"
+        assert "Overcast" in tr["content"]
+
+    def test_full_session_with_prior_tool_history_has_no_orphans(self):
+        # The exact shape that 400'd in the field: a clean turn, then a tool
+        # turn, then a follow-up question carrying the tool history.
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "what time is it"},
+            {"role": "assistant", "content": "It's 2:48 PM."},
+            {"role": "user", "content": "temperature in Montreal"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_plan_x", "type": "function",
+                             "function": {"name": "getWeather", "arguments": {"location": "Montreal"}}}]},
+            {"role": "user", "content": "[Tool result: getWeather]\n20C", "tool_name": "getWeather"},
+            {"role": "assistant", "content": "It's 20C in Montreal."},
+            {"role": "user", "content": "how are you"},
+        ]
+        _system, out = llm_module._messages_to_anthropic(messages)
+        _assert_no_orphan_tool_use(out)
+
+    def test_trailing_tool_use_gets_synthetic_result(self):
+        messages = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "getWeather", "arguments": {}}}]},
+        ]
+        _system, out = llm_module._messages_to_anthropic(messages)
+        _assert_no_orphan_tool_use(out)
+
+    def test_native_tool_role_still_pairs(self):
+        # The pre-existing role="tool" path must keep working.
+        messages = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "getWeather", "arguments": {"city": "Tbilisi"}}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "Sunny"},
+        ]
+        _system, out = llm_module._messages_to_anthropic(messages)
+        _assert_no_orphan_tool_use(out)
+
+
 class TestAnthropicToolSchema:
     @patch("jarvis.llm.requests.post")
     def test_openai_tools_translated_to_anthropic_input_schema(self, mock_post):

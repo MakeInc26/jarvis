@@ -100,38 +100,85 @@ def _messages_to_anthropic(messages: List[Dict[str, Any]]) -> Tuple[str, List[Di
 
     Returns ``(system_text, anthropic_messages)``. System messages are joined
     on double-newline and returned separately (Anthropic puts ``system`` at the
-    top level, not in the messages array). ``role=tool`` messages become a
-    user message wrapping a single ``tool_result`` block. Assistant messages
-    that carry ``tool_calls`` get rewritten as a content list with optional
-    leading text and one ``tool_use`` block per call.
+    top level, not in the messages array).
+
+    Tool-use pairing
+    ----------------
+    Anthropic rejects (HTTP 400) any ``tool_use`` block that is not immediately
+    followed by a ``tool_result`` block carrying the matching id. The rest of
+    this codebase, written against Ollama (which does not enforce that), often
+    represents a tool result as a ``role="user"`` ``"[Tool result: ...]"`` text
+    message tagged with ``tool_name`` rather than a ``role="tool"`` message.
+    Left untranslated that orphans the ``tool_use`` and 400s every request once
+    any tool has run. We therefore pair each assistant ``tool_use`` with the
+    following result-bearing message (``role="tool"`` *or* a ``tool_name``/
+    ``tool_call_id``-tagged user message), emitting a real ``tool_result`` block
+    with the matching id, and synthesise placeholder results for any id left
+    unsatisfied so a ``tool_use`` is never orphaned.
     """
     system_parts: List[str] = []
     out: List[Dict[str, Any]] = []
+    pending_tool_ids: List[str] = []
+    synth_counter = 0
+
+    def _close_pending() -> None:
+        # Satisfy any tool_use ids still awaiting a result so Anthropic never
+        # sees an orphaned tool_use (e.g. a non-result message intervened, or
+        # the assistant tool_use was the last message in the history).
+        nonlocal pending_tool_ids
+        if pending_tool_ids:
+            out.append({
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": tid, "content": "(no result)"}
+                    for tid in pending_tool_ids
+                ],
+            })
+            pending_tool_ids = []
+
     for m in messages:
         if not isinstance(m, dict):
             continue
         role = m.get("role")
         content = m.get("content", "")
+
         if role == "system":
             if isinstance(content, str) and content:
                 system_parts.append(content)
             continue
-        if role == "tool":
-            tool_use_id = m.get("tool_call_id") or m.get("id") or ""
+
+        # A result-bearing turn: either a native tool role, or the codebase's
+        # Ollama-friendly user-text convention tagged with tool metadata.
+        is_tool_result = role == "tool" or (
+            role == "user" and ("tool_name" in m or "tool_call_id" in m)
+        )
+        if is_tool_result:
             text = content if isinstance(content, str) else json.dumps(content)
-            out.append({
-                "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": str(tool_use_id), "content": text}
-                ],
-            })
+            if pending_tool_ids:
+                explicit_id = m.get("tool_call_id") or m.get("id")
+                if explicit_id and str(explicit_id) in pending_tool_ids:
+                    tid = str(explicit_id)
+                    pending_tool_ids.remove(tid)
+                else:
+                    tid = pending_tool_ids.pop(0)
+                out.append({
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": tid, "content": text}],
+                })
+            else:
+                # No tool_use is open — a bare tool_result would itself 400, so
+                # fold the text into a plain user message.
+                out.append({"role": "user", "content": text})
             continue
+
         if role == "assistant":
             tool_calls = m.get("tool_calls") or []
             if tool_calls:
+                _close_pending()
                 blocks: List[Dict[str, Any]] = []
                 if isinstance(content, str) and content.strip():
                     blocks.append({"type": "text", "text": content})
+                new_ids: List[str] = []
                 for tc in tool_calls:
                     if not isinstance(tc, dict):
                         continue
@@ -148,17 +195,29 @@ def _messages_to_anthropic(messages: List[Dict[str, Any]]) -> Tuple[str, List[Di
                             args = {}
                     if not isinstance(args, dict):
                         args = {}
+                    tid = str(tc.get("id") or "")
+                    if not tid:
+                        synth_counter += 1
+                        tid = f"toolu_auto_{synth_counter}"
                     blocks.append({
                         "type": "tool_use",
-                        "id": str(tc.get("id") or ""),
+                        "id": tid,
                         "name": str(fn.get("name") or ""),
                         "input": args,
                     })
+                    new_ids.append(tid)
                 out.append({"role": "assistant", "content": blocks})
+                pending_tool_ids = new_ids
                 continue
-        # Plain user/assistant message with string content.
+
+        # Plain user/assistant message. Close out any open tool_use first so it
+        # isn't orphaned by this intervening non-result turn.
+        _close_pending()
         normalised_role = role if role in ("user", "assistant") else "user"
         out.append({"role": normalised_role, "content": content})
+
+    # A trailing tool_use with no result would 400; never leave one open.
+    _close_pending()
     return "\n\n".join(system_parts), out
 
 
